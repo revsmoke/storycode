@@ -1,6 +1,6 @@
 # Story to Code: PRD
 
-Draft, 2026-10-19. Living version: [Claude Doc](https://claude.ai/code/artifact/af80869b-9c2e-4e1a-9036-372f81b3c6f4).
+Draft, 2026-10-19. Gap review applied 2026-10-19. Living version: [Claude Doc](https://claude.ai/code/artifact/af80869b-9c2e-4e1a-9036-372f81b3c6f4).
 
 ## Overview
 
@@ -46,6 +46,24 @@ The loop, repeated for every story:
 
 The person can also pin decisions ("keep it a web app") so later stories cannot overturn them, and roll back to any earlier version.
 
+Around the two halves sit four smaller panes, each reachable in one click:
+
+- **Assumptions**: every guess Claude has made, with its confidence and the story behind it; confirm, reject or pin each one.
+- **Changes**: the change cards in order, newest first, with pivots badged.
+- **Versions**: a timeline of every version; click one to view it in the preview, roll back to it, or diff it against the current version.
+- **Settings**: the Claude API key, provider keys, the wild/steady dial and export.
+
+## Stories and precedence
+
+Stories are an ordered list, and the order carries meaning.
+
+- Every story gets a stable id when it is created. Editing or moving a story keeps the id, so traces and change cards survive rewording and reordering.
+- When two stories conflict, the one lower in the list wins. New stories are appended, so by default the newest story wins; dragging a story up or down changes which one wins. A pinned decision beats both. This is the rule FR-7 refers to.
+- A disabled story stays in the list but is skipped by inference, so the person can see what the app looks like without it and re-enable it later.
+- Personas are inferred from names: the first "Joe" creates a persona and later stories about Joe attach to it. A story that only describes a persona ("Joe is a store manager") adds a fact to that persona and produces no screen.
+- A story too vague to change the app ("Joe is happy") produces no slice. The change card says so and suggests what the story could add (a place, a device, an action, a thing Joe wants).
+- Deleting a story removes the artifacts only it implied. An artifact that a later story also depends on stays, and its trace is updated to the remaining stories.
+
 ## Worked examples
 
 These two sequences are the acceptance scenarios for v1. Each row is one story and what the app must become after it.
@@ -80,7 +98,7 @@ These two sequences are the acceptance scenarios for v1. Each row is one story a
 - [ ] FR-4 Maintain one App Model (JSON) as the single source of truth, regenerated or patched after each story change.
 - [ ] FR-5 Infer platform, personas, screens and navigation, components, entities and relationships, integrations, and non-functional needs (offline, auth, location).
 - [ ] FR-6 Record every guess as an explicit assumption with a confidence level; the person can confirm, reject or pin it.
-- [ ] FR-7 When a story contradicts an earlier one, prefer the newest story unless the earlier decision is pinned, and say so in the change card.
+- [ ] FR-7 When stories conflict, the story lower in the list wins (by default the newest) unless the earlier decision is pinned, and the change card says so.
 
 **Generation and preview**
 
@@ -94,6 +112,27 @@ These two sequences are the acceptance scenarios for v1. Each row is one story a
 
 - [ ] FR-13 Version every App Model and code snapshot; diff and roll back between any two versions.
 - [ ] FR-14 Export the app as a folder or push it to a Git repository, with the stories and App Model included.
+
+**Control and feedback**
+
+- [ ] FR-15 An Assumptions panel lists every open assumption with its confidence and source story; rejecting one re-runs inference with the rejection as a constraint.
+- [ ] FR-16 Every change produces a change card: the stories that caused it, a summary of the model diff, the files touched, new assumptions, a pivot flag when the app's identity changed, and a one-click rollback.
+- [ ] FR-17 A story edit made while a change is in flight cancels that change and restarts after a short debounce; the preview keeps the last good version until the new one is ready.
+- [ ] FR-18 Failures never blank the preview. When Claude is unreachable, returns an invalid model, or generated code throws, the last good version stays up and an error card explains and offers retry.
+- [ ] FR-19 Settings hold the Claude API key, provider keys and the wild/steady dial. Keys are never written into generated code, exports or the App Model.
+
+## Non-functional requirements
+
+| Area | Target for v1 |
+| --- | --- |
+| Latency | A change card appears within a few seconds of a story change and the preview updates within 10 seconds for story sets under 20 stories. The model patch streams first so the card can show before code finishes. |
+| Cost | One story change re-reads the story set once (cached) and regenerates only affected slices. Settings show the project's token spend to date. |
+| Determinism | The same story set, pins and dial setting produce the same screens, components and entities (names and structure), even if wording in generated code differs. Achieved by patching the model rather than regenerating it, and low sampling temperature. |
+| Browser support | The tool and generated apps run in the current versions of Chrome, Safari, Firefox and Edge. Generated apps need only custom elements, Shadow DOM, ES modules and IndexedDB, all baseline features. |
+| Accessibility | Generated components use semantic HTML, labelled controls, keyboard focus order and visible focus; wireframe mode keeps readable contrast. |
+| Security | The preview runs in a sandboxed iframe on its own origin. No secrets in generated code. Generated code is linted before it is loaded. |
+| Privacy | Stories and the App Model are sent to the Claude API and stored where the tool runs (see Open questions). No story content leaves the tool for telemetry without opt-in. |
+| Size | A generated app loads from static files with no bundler; the shell and store together stay under a few hundred kilobytes uncompressed. |
 
 ## Architecture
 
@@ -115,6 +154,116 @@ The App Model is the hinge: stories change the model, the model's diff drives th
 - **Generated app** is plain files: `index.html`, one module per custom element, a `store.js` data layer, and a `manifest.json` when a PWA is inferred.
 - **Preview** runs the generated app in a sandboxed iframe inside device frames, swapping modules in place on each change.
 
+## App Model schema
+
+The App Model is one JSON document with a versioned schema. Every artifact in it carries the ids of the stories that implied it, which is what makes the trace in FR-3 and the change cards possible.
+
+```json
+{
+  "schemaVersion": 1,
+  "meta": { "name": "Weather", "summary": "Local and remote weather for Susie", "dial": "steady" },
+  "platform": { "primary": "mobile", "targets": ["mobile"], "distribution": "web", "stories": ["s1"] },
+  "personas": [{ "id": "susie", "name": "Susie", "facts": [], "stories": ["s1"] }],
+  "screens": [
+    { "id": "home", "name": "Weather home", "route": "/", "persona": "susie",
+      "components": ["weather-card", "place-search"], "stories": ["s1", "s2", "s3"] }
+  ],
+  "navigation": { "kind": "stack", "start": "home", "links": [] },
+  "components": [
+    { "tag": "weather-card", "purpose": "Shows conditions for one location",
+      "attributes": ["location-id", "day"], "events": ["refresh"], "stories": ["s2"] }
+  ],
+  "entities": [
+    { "name": "Location", "fields": { "id": "string", "name": "string", "lat": "number", "lon": "number", "isLocal": "boolean" },
+      "relations": [], "stories": ["s2", "s3"] },
+    { "name": "Forecast", "fields": { "id": "string", "locationId": "string", "day": "date", "summary": "string", "high": "number", "low": "number" },
+      "relations": [{ "to": "Location", "kind": "belongsTo" }], "stories": ["s2", "s3"] }
+  ],
+  "integrations": [
+    { "id": "weather", "kind": "weather-api", "provider": null, "mocked": true, "stories": ["s2"] },
+    { "id": "geo", "kind": "browser-geolocation", "stories": ["s2"] }
+  ],
+  "nonFunctional": { "offline": false, "auth": "none", "location": true },
+  "assumptions": [
+    { "id": "a1", "text": "Local weather means the device's current position", "confidence": "high",
+      "status": "open", "stories": ["s2"], "path": "/nonFunctional/location" }
+  ],
+  "pins": [{ "path": "/platform/primary", "value": "mobile", "reason": "keep it a phone app" }],
+  "rejected": [{ "text": "The store is a grocery store", "stories": ["s3"] }]
+}
+```
+
+Rules about the model:
+
+- `stories` on every artifact is the trace. An artifact with an empty `stories` list is removed on the next change.
+- `assumptions[].path` points at the part of the model the guess shaped, so confirming or rejecting it maps to a concrete edit. `confidence` is one of low, medium or high.
+- `pins` are JSON Pointer paths with the value to keep. They are enforced by the validator, not only by the prompt: a patch that changes a pinned path is rejected and the change card reports the conflict.
+- `rejected` assumptions are sent back to inference as constraints so the same guess is not made twice.
+- `schemaVersion` changes come with a migration so saved projects keep opening.
+
+## Inference contract
+
+Each story change makes one inference call, then one generation call per affected slice.
+
+**Inference input**: the system prompt (schema, rules, the dial's meaning), the current App Model, every enabled story in order with its id, the pins and rejected assumptions, and which story ids changed. The code is never sent; the model is the only description of the app Claude sees.
+
+**Inference output**, via tool use so it is always well-formed JSON: a JSON Patch (RFC 6902) against the App Model, the change card text (title, why, pivot flag) and any new assumptions. Patches keep the call small and make the diff explicit.
+
+**Validation**: the patched model is checked against the schema and the pins. On failure the error is sent back once; on a second failure the change is abandoned, the last good model stays, and an error card is shown (FR-18).
+
+**The dial**: steady means patch minimally and prefer existing screens, components and entities over new ones. Wild means Claude may re-plan the whole model when a story suggests a different app. Both obey pins. The default is steady, and the first story in a project always runs wild because there is nothing to keep.
+
+**Generation input** per slice: the model entry for the slice (screen, components, entities), the model diff, the current source of the files being edited, the code conventions below and the theme tokens. Output: full file contents for the touched files only. Slices generate in parallel.
+
+**Caching**: the system prompt, conventions and story set are marked for prompt caching; only the tail of the context changes between calls.
+
+## Generated code conventions
+
+The generated app is a folder of static files that runs from any static file server, with this layout:
+
+```
+app/
+  index.html              loads app-shell, nothing else
+  app-shell.js            <app-shell>: layout per platform, hash router, navigation
+  components/<tag>.js     one custom element per UI concept
+  store.js                entity store over IndexedDB (see Data layer)
+  adapters/<id>.js        one module per integration, mocked until keyed
+  theme.css               design tokens; wireframe and styled are token sets
+  tests/<story-id>.test.js  one acceptance test per story
+  manifest.json, sw.js    only when a PWA is inferred
+  app-model.json          the App Model this code was generated from
+  stories.json            the story set, in order, with ids
+```
+
+Rules:
+
+- One custom element per UI concept, tag name taken from the model (`<weather-card>`, `<place-search>`, `<login-form>`). Attributes in, `CustomEvent`s out, Shadow DOM on.
+- Components reach data only through `store` and reach services only through an adapter. No fetch calls inside components.
+- Routing is hash-based (`#/forecast/florida`) so the app works from `file://` and from any static host.
+- Styling uses CSS custom properties from `theme.css`. Wireframe mode is a grayscale token set with visible boxes and labels; styled mode and the HIG set swap the tokens, not the components.
+- Each component module is regenerated only when its model entry changes (compared by hash). Untouched files stay byte for byte identical, which is what keeps the app stable as stories grow.
+- Semantic HTML, labelled form controls and a sensible tab order are required, and a lint pass rejects inline event handlers, `eval`, and any literal that looks like a key.
+- Every generated file starts with a comment naming the story ids it serves.
+
+## Data layer
+
+`store.js` is generated from the entities and is the only state in the app.
+
+- The API is the same for every entity: `store.Location.list()`, `.get(id)`, `.put(record)`, `.delete(id)`, `.query(filter)`, plus `store.subscribe(entity, callback)` so components re-render on change.
+- Each app gets one IndexedDB database with one object store per entity. The database version is the App Model version.
+- When an entity changes, Claude generates a migration with the code: added fields get a default, renamed fields get a mapping, removed fields are copied to an `_archive` store rather than dropped. The preview's data survives most story changes, which matters when the person is halfway through trying the app.
+- Seed data is generated per entity so screens never render empty in the preview. The person can clear it from Settings.
+- Adapters share one interface: a module that exports named async functions, a `mock` flag and a `configure(keys)` function. The mocked version returns fixtures that match the entity shape. Supplying a key in Settings swaps in the live version without regenerating code.
+- Generated apps are client-only in v1: local persistence, no server. Stories that imply shared data between people (Joe and Sally seeing the same list) produce roles in the model and an assumption that names the missing backend, so the gap is visible rather than silently faked. Revisiting this is an open question.
+
+## Preview sandbox and keys
+
+- The preview is an iframe on a separate origin from the tool, with `sandbox="allow-scripts allow-same-origin"` (same-origin is needed for IndexedDB on the preview origin, not the tool's) and `allow="geolocation"` only when the model asks for location.
+- A Content Security Policy limits scripts to the preview origin and network calls to the tool's proxy.
+- Provider keys live in the tool. In the preview, adapters call the tool's proxy (`/proxy/<integration-id>`), which adds the key. In an export, adapters read keys from a `config.js` the person fills in, which the export's `.gitignore` excludes.
+- Hot swap works by import URLs that carry the file hash. The shell re-imports changed modules and re-renders the affected screens; the store is kept when the entity schema did not change.
+- The preview reports runtime errors and failed acceptance tests back to the tool, which shows them on the change card.
+
 ## Vertical slices and how the app evolves
 
 Every story becomes one vertical slice: the thinnest path through UI, logic and data that makes the story true. "Susie sees the local weather" means a location service, a forecast adapter, a Forecast entity and a forecast card, all working together, not a finished UI layer waiting on a later data layer.
@@ -126,6 +275,26 @@ Rules the engine follows:
 - **Big shifts are allowed and announced.** When a story changes the app's identity (web to game, single user to multi-role), Claude regenerates freely and the change card marks it as a pivot.
 - **Components are reusable units.** One custom element per UI concept (`<weather-card>`, `<place-search>`, `<login-form>`), each with a small attribute and event API, so slices compose instead of duplicating.
 - **Each slice ships with a check.** A generated acceptance test per story (Playwright-style, run in the preview) confirms the story still holds after later changes.
+
+## Acceptance tests
+
+Each story gets one test, generated with its slice and kept in `tests/<story-id>.test.js`.
+
+- Tests run in the browser inside the preview with a small built-in runner, so no install is needed to see them pass. They drive the app through the DOM: open a route, fill a form, click, then assert on the DOM and on the store.
+- The test is written from the story's acceptance criteria when the person gave them (FR-2), otherwise from criteria Claude infers and lists on the change card, where the person can correct them.
+- All tests run after every change. A test from an earlier story that fails is shown as a regression on that story, and the change card offers a repair (a further generation call scoped to that slice).
+- Exports include the same tests as Playwright specs, so a developer taking over can run them with `npx playwright test`.
+
+## Versions, change cards and assumptions
+
+A version is the unit of history: the story set, the App Model, the code snapshot, the test results and the change card that produced it. A new version is created after every successful change.
+
+- Snapshots are content-addressed, so untouched files are stored once across versions and rollback is cheap.
+- Rollback creates a new version whose content is the old version's. History is never rewritten, so a rollback can itself be rolled back.
+- Diff view shows the model diff (structured: added, removed, changed artifacts) and the code diff per file, between any two versions.
+- A change card holds: a title, the stories that caused the change, the model diff summary, the files touched, the assumptions added, inferred acceptance criteria, a pivot badge when the app's identity changed, test results, and buttons to roll back or open the diff.
+- An assumption moves from open to confirmed, rejected or pinned. Confirming raises its confidence and removes it from the panel. Rejecting adds it to the model's `rejected` list and re-runs inference. Pinning adds a pin at the assumption's path.
+- Pins can be removed from the Assumptions panel. When a story conflicts with a pin, the change card says which pin blocked it and offers to unpin and retry.
 
 ## Platform inference
 
@@ -141,16 +310,38 @@ Platform is just another inferred property of the App Model, and the preview fra
 
 For App Store stories the readiness checklist covers what Apple reviews: privacy manifest and permission strings, Sign in with Apple when other social logins exist, in-app purchase rules, minimum functionality beyond a wrapped website, icons and launch screens. Whether v1 should go further and emit SwiftUI is an open question below.
 
+## Export
+
+An export is the `app/` folder above plus what a developer needs to pick it up.
+
+- A `README.md` that says how to run it (any static server, for example `npx serve app`), how to supply keys in `config.js`, and how to run the tests.
+- `stories.json` and `app-model.json`, so the project can be re-imported into Story to Code and so the code's origin is readable.
+- A `CHANGES.md` built from the change cards, newest first.
+- When native distribution was inferred, a `native/` Capacitor project and `native/APP_STORE_CHECKLIST.md`.
+- Git export creates one commit per version with the change card title as the message, so `git log` reads as the story history. Pushing to a remote uses the person's GitHub connection; the tool never stores a Git token in the export.
+- Hand edits to exported code are not read back in. The code is derived from the model, so a regeneration would overwrite them. The README says so, and a developer who wants to take over stops using the tool for that project ("eject").
+
+## Success metrics
+
+What v1 is measured on, in order of importance:
+
+- Both worked examples pass end to end, story by story, with no manual fixes.
+- Acceptance rate: share of changes the person keeps (no rollback, no rejection of the change's assumptions within the next two stories).
+- Time from story change to preview update, median and 90th percentile.
+- Regression rate: share of changes that break an earlier story's acceptance test.
+- Trace coverage: every screen, component and entity has at least one story.
+- Export success: an exported app runs and passes its tests on a clean machine with only keys added.
+
 ## Milestones
 
 No dates are set yet; each milestone ends with a demo of the worked examples it unlocks.
 
-1. **M0 Spike.** One story in, one login screen out. App Model schema v0, a single Claude call, a static preview.
-2. **M1 The loop.** Story list, re-inference on every change, hot-swapped preview, change cards. Demo: Joe and Sally, stories 1 to 3.
-3. **M2 Real data.** Entity-driven data layer with IndexedDB, mocked then live API adapters, geolocation. Demo: Susie, stories 1 to 3.
-4. **M3 Trust and control.** Assumptions panel, pinning, version history, diff and rollback, per-story acceptance tests.
-5. **M4 Platforms.** Multi-frame preview, PWA output, game scaffold, Capacitor packaging and the App Store checklist. Demo: Susie, story 4.
-6. **M5 Export.** Folder and Git export with stories and App Model included.
+1. **M0 Spike.** One story in, one login screen out. App Model schema v0, a single Claude call, a static preview. Done when "Joe logs into an app" renders a login screen in a phone frame from a generated custom element.
+2. **M1 The loop.** Story list, re-inference on every change, hot-swapped preview, change cards. Demo: Joe and Sally, stories 1 to 3. Done when each story updates the preview without a reload and the card names the story behind every change.
+3. **M2 Real data.** Entity-driven data layer with IndexedDB, mocked then live API adapters, geolocation. Demo: Susie, stories 1 to 3. Done when the local forecast is live with a real key and story 3 adds Florida without losing it.
+4. **M3 Trust and control.** Assumptions panel, pinning, version history, diff and rollback, per-story acceptance tests. Done when a pin blocks a conflicting story, a rollback restores a version, and tests catch a regression.
+5. **M4 Platforms.** Multi-frame preview, PWA output, game scaffold, Capacitor packaging and the App Store checklist. Demo: Susie, story 4. Done when story 4 produces a game-shaped HIG UI, a Capacitor project that builds, and the checklist.
+6. **M5 Export.** Folder and Git export with stories and App Model included. Done when an exported Susie app runs and passes its tests on a clean machine.
 
 ## Risks
 
@@ -162,13 +353,37 @@ No dates are set yet; each milestone ends with a demo of the worked examples it 
 | Token cost grows with the story set | Every change re-reads all stories | Summarised App Model as context, prompt caching, only affected slices regenerated |
 | Generated code is insecure or low quality | Exported apps get used for real | Lint and test gates, no secrets in generated code, sandboxed preview iframe |
 | App Store expectations exceed a web wrapper | Apple rejects thin wrappers | Checklist calls this out; native output is a later decision (open question) |
+| Claude returns an invalid or pin-breaking model | A bad patch could corrupt the only source of truth | Schema and pin validation before the patch is applied; one retry with the error; last good version kept |
+| Entity changes wipe preview data | The person loses what they were trying mid-session | Generated migrations with defaults, renames and an archive store |
+| Edits while a change is in flight | Two generations race and the preview flickers between them | Cancel and restart after a debounce; preview holds the last good version |
+| Vague stories produce nothing or everything | The person cannot tell whether the tool understood | No-op change card with suggestions; the dial bounds how far a story can reach |
+| Hand edits lost after export | A developer's work is overwritten by a regeneration | Code is never read back; the README names the eject point |
 
 ## Open questions
 
+Where the draft already picks a default, it is named so the question can be closed by agreeing with it.
+
 - [ ] Native apps: is a Capacitor wrapper plus an HIG-styled web UI enough for "I want it on the App Store", or should v1 also emit SwiftUI/Kotlin? (Draft assumes the wrapper.)
-- [ ] Who runs Story to Code: a hosted web app, a local tool, or a Claude Code plugin? This decides where the Claude API key lives.
-- [ ] Should the tool itself be built with the same stack (vanilla web components), so it can dogfood its own output?
-- [ ] How much randomness is wanted? A "wild" vs "steady" dial could set how freely Claude reinterprets the app.
-- [ ] Where do real API keys come from (weather, maps) and which providers are the defaults?
-- [ ] Is there a backend in generated apps (auth, shared data between Joe and Sally), or are they client-only with local persistence in v1?
-- [ ] Should stories be able to reference each other or personas defined once ("Joe is a store manager")?
+- [ ] Who runs Story to Code: a hosted web app, a local tool, or a Claude Code plugin? This decides where the Claude API key and projects live. (Draft assumes a local tool with a small server for M0 to M3, so keys stay on the person's machine and the preview proxy is simple; hosting is a later decision.)
+- [ ] Should the tool itself be built with the same stack (vanilla web components), so it can dogfood its own output? (Draft assumes yes.)
+- [ ] How much randomness is wanted? The wild/steady dial is specified above; the open part is whether a middle setting is needed and what the default should be after the first story. (Draft: steady.)
+- [ ] Where do real API keys come from (weather, maps) and which providers are the defaults? (Draft: the person supplies keys in Settings; default providers to be chosen per integration kind, starting with weather and geocoding.)
+- [ ] Is there a backend in generated apps (auth, shared data between Joe and Sally), or are they client-only with local persistence in v1? (Draft assumes client-only, with the missing backend shown as an assumption.)
+- [ ] Should stories be able to reference each other or personas defined once ("Joe is a store manager")? (Draft: personas are inferred from names and persona-only stories add facts; explicit cross-references are not needed in v1.)
+- [ ] Should a project have a token or cost ceiling, and what happens when it is reached?
+- [ ] Should re-importing an export (stories plus App Model) be supported in v1, or is export one-way?
+- [ ] How are the story set and App Model stored for a project: a single JSON file on disk, or a small database? (Draft: one project folder on disk, versions as content-addressed files.)
+
+## Glossary
+
+- **Story**: one plain-language scenario in the ordered list; the only input.
+- **App Model**: the JSON description of the app (platform, personas, screens, components, entities, integrations, assumptions, pins); the single source of truth.
+- **Slice**: the smallest working path through UI, logic and data that makes one story true.
+- **Assumption**: a guess Claude made to fill a gap in the stories, with a confidence level and a status.
+- **Pin**: a decision the person locked; later stories cannot change it.
+- **Change card**: the explanation shown after each change, naming the stories behind it.
+- **Pivot**: a change that alters the app's identity (its kind, platform or main persona set).
+- **Version**: a snapshot of stories, model, code, tests and change card; the unit of rollback.
+- **Dial**: the wild/steady setting that bounds how freely inference may re-plan the app.
+- **Adapter**: a generated module that wraps one external service and can be mocked.
+- **Eject**: the point where a developer takes an export and stops regenerating from stories.
